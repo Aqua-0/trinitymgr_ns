@@ -1,0 +1,217 @@
+#---------------------------------------------------------------------------------
+.SUFFIXES:
+#---------------------------------------------------------------------------------
+
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
+endif
+
+TOPDIR ?= $(CURDIR)
+include $(DEVKITPRO)/libnx/switch_rules
+
+TARGET		:=	$(notdir $(CURDIR))
+APP_VERSION := 2.0.0
+MODE		?=	release
+BUILD		:=	build/$(MODE)
+BUILDDIR	:=	$(notdir $(BUILD))
+BUILD_ROOT	:=	$(patsubst %/,%,$(dir $(BUILD)))
+SOURCES  	:= source \
+		  source/gfx \
+		  source/fs \
+		  source/net \
+		  source/mod \
+		  source/ui \
+		  source/zip \
+		  source/gb
+APP_TITLE   := TrinityMGR
+APP_AUTHOR  := Aqua
+INCLUDES 	:= include
+ROMFS   	:= romfs
+ICON_RELEASE	:= icon.jpg
+ICON_DEBUG	:= icon_debug.jpg
+ifeq ($(MODE),debug)
+ICON     	:= $(ICON_DEBUG)
+else
+ICON     	:= $(ICON_RELEASE)
+endif
+
+#---------------------------------------------------------------------------------
+# options for code generation
+#---------------------------------------------------------------------------------
+ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+
+CFLAGS	:=	-Wall -ffunction-sections \
+			$(ARCH) $(DEFINES) -DAPP_VERSION=\"$(APP_VERSION)\"
+
+ASFLAGS	:=	-g $(ARCH)
+LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+
+
+#---------------------------------------------------------------------------------
+# list of directories containing libraries, this must be the top level containing
+# include and lib
+#---------------------------------------------------------------------------------
+LIBDIRS	:= $(PORTLIBS) $(LIBNX)
+LIBS    := -lcurl -lfreetype -lharfbuzz -lpng -lbz2 -lz -lnx
+
+export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(TOPDIR)/$(dir)) \
+			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
+			-I$(TOPDIR)/$(BUILD)
+
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+CFLAGS   += -I$(PORTLIBS)/include/freetype2 -DCURL_STATICLIB \
+            -I$(TOPDIR)/source -I$(TOPDIR)/source/gfx -I$(TOPDIR)/source/fs \
+            -I$(TOPDIR)/source/net -I$(TOPDIR)/source/mod -I$(TOPDIR)/source/ui \
+            -I$(TOPDIR)/source/zip -I$(TOPDIR)/source/gb
+
+ifeq ($(MODE),debug)
+CFLAGS	+=	-O0 -g3 -DAPP_DEBUG_BUILD
+else
+CFLAGS	+=	-O2 -DNDEBUG -DAPP_RELEASE_BUILD
+endif
+
+CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
+#---------------------------------------------------------------------------------
+# no real need to edit anything past this point unless you need to add additional
+# rules for different file extensions
+#---------------------------------------------------------------------------------
+ifneq ($(BUILDDIR),$(notdir $(CURDIR)))
+#---------------------------------------------------------------------------------
+
+OUTPUT_NAME	:=	$(TARGET)_$(MODE)
+export OUTPUT	:=	$(CURDIR)/$(OUTPUT_NAME)
+export TOPDIR	:=	$(CURDIR)
+
+export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
+			$(foreach dir,$(DATA),$(CURDIR)/$(dir))
+
+export DEPSDIR	:=	$(CURDIR)/$(BUILD)
+
+CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+
+#---------------------------------------------------------------------------------
+# use CXX for linking C++ projects, CC for standard C
+#---------------------------------------------------------------------------------
+ifeq ($(strip $(CPPFILES)),)
+#---------------------------------------------------------------------------------
+	export LD	:=	$(CC)
+#---------------------------------------------------------------------------------
+else
+#---------------------------------------------------------------------------------
+	export LD	:=	$(CXX)
+#---------------------------------------------------------------------------------
+endif
+export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES))
+export OFILES_SRC	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+export OFILES 	:=	$(OFILES_BIN) $(OFILES_SRC)
+export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
+
+export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+
+ifeq ($(strip $(CONFIG_JSON)),)
+	jsons := $(wildcard *.json)
+	ifneq (,$(findstring $(TARGET).json,$(jsons)))
+		export APP_JSON := $(TOPDIR)/$(TARGET).json
+	else
+		ifneq (,$(findstring config.json,$(jsons)))
+			export APP_JSON := $(TOPDIR)/config.json
+		endif
+	endif
+else
+	export APP_JSON := $(TOPDIR)/$(CONFIG_JSON)
+endif
+
+ifeq ($(strip $(ICON)),)
+	icons := $(wildcard *.jpg)
+	ifneq (,$(findstring $(TARGET).jpg,$(icons)))
+		export APP_ICON := $(TOPDIR)/$(TARGET).jpg
+	else
+		ifneq (,$(findstring icon.jpg,$(icons)))
+			export APP_ICON := $(TOPDIR)/icon.jpg
+		endif
+	endif
+else
+	export APP_ICON := $(TOPDIR)/$(ICON)
+endif
+
+ifeq ($(strip $(NO_ICON)),)
+	export NROFLAGS += --icon=$(APP_ICON)
+endif
+
+ifeq ($(strip $(NO_NACP)),)
+	export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp --version=$(APP_VERSION)
+endif
+
+ifneq ($(APP_TITLEID),)
+	export NACPFLAGS += --titleid=$(APP_TITLEID)
+endif
+
+ifneq ($(ROMFS),)
+	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
+endif
+
+.PHONY: $(BUILD) clean all
+
+#---------------------------------------------------------------------------------
+all: $(BUILD)
+
+$(BUILD):
+	@[ -d $@ ] || mkdir -p $@
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+
+#---------------------------------------------------------------------------------
+clean:
+	@echo clean ...
+	@rm -fr $(BUILD_ROOT)
+	@for mode in release debug; do \
+		rm -f $(TARGET)_$$mode.elf $(TARGET)_$$mode.nro $(TARGET)_$$mode.nacp; \
+		rm -f $(TARGET)_$$mode.nso $(TARGET)_$$mode.npdm $(TARGET)_$$mode.nsp; \
+	done
+
+
+#---------------------------------------------------------------------------------
+else
+.PHONY:	all
+
+DEPENDS	:=	$(OFILES:.o=.d)
+
+#---------------------------------------------------------------------------------
+# main targets
+#---------------------------------------------------------------------------------
+ifeq ($(strip $(APP_JSON)),)
+
+all	:	$(OUTPUT).nro
+
+ifeq ($(strip $(NO_NACP)),)
+$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
+else
+$(OUTPUT).nro	:	$(OUTPUT).elf
+endif
+
+else
+
+all	:	$(OUTPUT).nsp
+
+$(OUTPUT).nsp	:	$(OUTPUT).nso $(OUTPUT).npdm
+
+$(OUTPUT).nso	:	$(OUTPUT).elf
+
+endif
+
+$(OUTPUT).elf	:	$(OFILES)
+
+$(OFILES_SRC)	: $(HFILES_BIN)
+
+%.bin.o	%_bin.h :	%.bin
+#---------------------------------------------------------------------------------
+	@echo $(notdir $<)
+	@$(bin2o)
+
+-include $(DEPENDS)
+
+#---------------------------------------------------------------------------------------
+endif
+#---------------------------------------------------------------------------------------
