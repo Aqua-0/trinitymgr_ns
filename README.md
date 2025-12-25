@@ -1,11 +1,11 @@
 # trinitymgr_ns
-A mod loader for Pokemon Legends: Z-A on Nintendo Switch
+A mod loader for Pokemon Legends: Z-A and Pokemon Scarlet and Violet on Nintendo Switch
 
 Go to https://gamebanana.com/tools/21202 for use instructions
 
 ## Build
 - Install devkitPro with libnx and switch ports of SDL2, SDL2_image, SDL2_ttf, libcurl.
-- Ensure `DEVKITPRO` and `DEVKITARM` env vars are set.
+- Ensure `DEVKITPRO` env var is set.
 - `make clean && make -j` to build `trinitymanager_ns.nro`.
 
 ## Notes
