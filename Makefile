@@ -10,7 +10,7 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
 TARGET		:=	$(notdir $(CURDIR))
-APP_VERSION := 2.0.0
+APP_VERSION := 3.0.0
 MODE		?=	release
 BUILD		:=	build/$(MODE)
 BUILDDIR	:=	$(notdir $(BUILD))

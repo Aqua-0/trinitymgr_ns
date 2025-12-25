@@ -102,7 +102,7 @@ struct App {
     static constexpr const char* SELF_NRO_PATH = "sdmc:/switch/trinitymgr_ns/trinitymgr_ns.nro";
     static constexpr const char* UPDATE_ASSET_HINT = "trinitymgr_ns";
     static constexpr const char* DEFAULT_UPDATE_FEED = "https://api.github.com/repos/Aqua-0/trinitymgr_ns/releases/latest";
-    static constexpr const char* APP_VERSION_STRING = "2.0";
+    static constexpr const char* APP_VERSION_STRING = "3.0";
 
     enum class ActiveGame { ZA, SV };
     enum class SvTitle { Violet, Scarlet };

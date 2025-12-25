@@ -587,6 +587,12 @@
         std::vector<std::string> lines;
         gfx::wrapTextLines(aboutText, WIN_W - NAV_W - 40, font, font_small, true, lines);
         int y = 70;
+#ifdef APP_VERSION
+        text(std::string("Version: ") + APP_VERSION, NAV_W+20, y, textPrimary(), true);
+#else
+        text(std::string("Version: ") + APP_VERSION_STRING, NAV_W+20, y, textPrimary(), true);
+#endif
+        y += 30;
         for(const auto& line : lines){
             text(line, NAV_W+20, y, textPrimary(), true);
             y += 26;
