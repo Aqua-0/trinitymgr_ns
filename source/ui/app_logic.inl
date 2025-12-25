@@ -11,6 +11,86 @@
         self_nro_path = path;
     }
 
+    static std::string tidToString(u64 tid){
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%016llX", (unsigned long long)tid);
+        return std::string(buf);
+    }
+    u64 activeTitleId() const {
+        if(active_game == ActiveGame::SV){
+            return (sv_title == SvTitle::Scarlet) ? SV_SCARLET_TID : SV_VIOLET_TID;
+        }
+        return ZA_TID;
+    }
+    mods::Game activeModsGame() const {
+        return (active_game == ActiveGame::SV) ? mods::Game::SV : mods::Game::ZA;
+    }
+    const char* activeGameName() const {
+        return (active_game == ActiveGame::SV) ? "SV" : "ZA";
+    }
+    const char* activeSvTitleName() const {
+        return (sv_title == SvTitle::Scarlet) ? "Scarlet" : "Violet";
+    }
+    void setDefaultTargetRomfs(){
+        target_romfs = std::string("sdmc:/atmosphere/contents/") + tidToString(activeTitleId()) + "/romfs";
+    }
+    void loadSettings(){
+        FILE* f = fopen(SETTINGS_PATH, "r");
+        if(!f) return;
+        char buf[256];
+        while(fgets(buf, sizeof(buf), f)){
+            std::string line(buf);
+            while(!line.empty() && (line.back()=='\r' || line.back()=='\n')) line.pop_back();
+            if(line.empty() || line[0]=='#') continue;
+            auto eq = line.find('=');
+            if(eq == std::string::npos) continue;
+            std::string k = line.substr(0, eq);
+            std::string v = line.substr(eq+1);
+            while(!k.empty() && isspace((unsigned char)k.back())) k.pop_back();
+            while(!v.empty() && isspace((unsigned char)v.front())) v.erase(v.begin());
+            for(char& c : k) c = (char)tolower((unsigned char)c);
+            for(char& c : v) c = (char)tolower((unsigned char)c);
+            if(k == "game"){
+                if(v == "sv") active_game = ActiveGame::SV;
+                else if(v == "za" || v == "la") active_game = ActiveGame::ZA; // accept legacy "la" as ZA
+                else active_game = ActiveGame::ZA;
+            }else if(k == "sv"){
+                if(v == "scarlet") sv_title = SvTitle::Scarlet;
+                else sv_title = SvTitle::Violet;
+            }
+        }
+        fclose(f);
+    }
+    void saveSettings(){
+        fsx::makedirs(MODS_PARENT_DIR);
+        FILE* f = fopen(SETTINGS_PATH, "w");
+        if(!f) return;
+        fprintf(f, "game=%s\n", (active_game==ActiveGame::SV) ? "sv" : "za");
+        fprintf(f, "sv=%s\n", (sv_title==SvTitle::Scarlet) ? "scarlet" : "violet");
+        fclose(f);
+    }
+    void applyGameSelection(bool do_rescan){
+        gb_game_id = (active_game==ActiveGame::SV) ? GB_GAME_SV : GB_GAME_ZA;
+        selection_cache_path = (active_game==ActiveGame::SV) ? SELECTION_CACHE_PATH_SV : SELECTION_CACHE_PATH_ZA;
+        profile_dir = (active_game==ActiveGame::SV) ? PROFILE_DIR_SV : PROFILE_DIR_ZA;
+        setDefaultTargetRomfs();
+        ensureModsRoot();
+        thumb_cache.clear();
+        gb_items.clear();
+        browse_cursor = 0;
+        gb_page = 0;
+        gb_pending_page = -1;
+        closeModInfo();
+        if(do_rescan){
+            showBlockingMessage("Loading Mods...");
+            rescanMods();
+            refreshProfileList();
+            if(screen==Screen::Browse && !gb_fetching.load() && !gb_thread_alive){
+                requestGbFetch(gb_page, true);
+            }
+        }
+    }
+
     void dl_worker(){
         std::string tlog, saved;
         const gb::FileEntry* choice = dl_has_file_choice ? &dl_file_choice : nullptr;
@@ -24,8 +104,8 @@
     }
     void rescan_worker(){
         std::string tlog;
-        tlog += "[scan] root=" + mods_root + "\n";
-        auto mods = mods::scan_root(mods_root, tlog);
+        tlog += "[scan] root=" + rescan_root + "\n";
+        auto mods = mods::scan_root(rescan_root, tlog, rescan_game);
         tlog += "[scan] found=" + std::to_string(mods.size()) + "\n";
         rescan_result = std::move(mods);
         rescan_thread_log = std::move(tlog);
@@ -34,9 +114,13 @@
         rescan_thread_alive = false;
     }
     void gb_worker(){
+        const int req_page = gb_request_page;
+        const int req_game = gb_request_game_id;
         std::string tlog;
-        gb_thread_items = gb::fetch_mods_index_page(tlog, GB_PER_PAGE, gb_request_page + 1);
+        gb_thread_items = gb::fetch_mods_index_page(tlog, GB_PER_PAGE, req_page + 1, req_game);
         gb_thread_log = std::move(tlog);
+        gb_result_page = req_page;
+        gb_result_game_id = req_game;
         gb_done = true;
         gb_fetching = false;
         gb_thread_alive = false;
@@ -186,6 +270,8 @@
         rescan_failed = false;
         rescan_thread_log.clear();
         rescan_result.clear();
+        rescan_root = mods_root;
+        rescan_game = activeModsGame();
         rescan_stack = memalign(0x1000, RESCAN_STACK_SZ);
         if(!rescan_stack){
             rescanning = false;
@@ -236,6 +322,7 @@
         gb_thread_log.clear();
         gb_thread_items.clear();
         gb_request_page = page;
+        gb_request_game_id = gb_game_id;
         gb_pending_page = -1;
         gb_stack = memalign(0x1000, GB_STACK_SZ);
         if(!gb_stack){
@@ -306,6 +393,7 @@
             return;
         }
         gb_items.clear();
+        gb_status.clear();
         startGbThread(page);
     }
     bool init(){
@@ -357,7 +445,13 @@
         if(!font_small.load("romfs:/ui/Roboto-Medium.ttf", 22, log)){
             font_small = font;
         }
-        ensureModsRoot();
+        loadSettings();
+        applyGameSelection(false);
+        log += std::string("[game] active=") + activeGameName();
+        if(active_game == ActiveGame::SV){
+            log += std::string(" (") + activeSvTitleName() + ")";
+        }
+        log += " tid=0x" + tidToString(activeTitleId()) + "\n";
         loadBootBackgroundImage();
         showBlockingMessage("Loading Mods...");
         rescanMods();
@@ -425,7 +519,7 @@
     }
 
     void ensureModsRoot(){
-        const std::string desired = MODS_ROOT_NEW;
+        const std::string desired = (active_game==ActiveGame::SV) ? MODS_ROOT_SV : MODS_ROOT_NEW;
         const std::string legacy  = MODS_ROOT_LEGACY;
         const std::string parent  = MODS_PARENT_DIR;
         if(!fsx::isdir(parent)){
@@ -433,7 +527,7 @@
         }
         if(fsx::isdir(desired)){
             mods_root = desired;
-        }else if(fsx::isdir(legacy)){
+        }else if(active_game!=ActiveGame::SV && fsx::isdir(legacy)){
             if(::rename(legacy.c_str(), desired.c_str())==0){
                 mods_root = desired;
                 log += "[mods] moved legacy PLZAMods into " + desired + "\n";
@@ -462,7 +556,7 @@
     void rescanMods(){
         rescan_pending = false;
         log+="[scan] root="+mods_root+"\n";
-        modlist=mods::scan_root(mods_root,log);
+        modlist=mods::scan_root(mods_root,log, activeModsGame());
         for(auto& m:modlist) m.selected=true;
         mod_cursor=0; mod_scroll=0;
         log+="[scan] found="+std::to_string(modlist.size())+"\n";
@@ -471,7 +565,7 @@
     }
 
     void refreshProfileList(){
-        mods::list_selection_profiles(PROFILE_DIR, profile_list, log);
+        mods::list_selection_profiles(profile_dir, profile_list, log);
         if(profile_cursor >= (int)profile_list.size()){
             profile_cursor = std::max(0, (int)profile_list.size()-1);
         }
@@ -493,7 +587,7 @@
     void loadProfileAtCursor(){
         if(profile_list.empty()) return;
         const auto& p = profile_list[profile_cursor];
-        if(mods::load_selection_profile(PROFILE_DIR, p.id, modlist, log)){
+        if(mods::load_selection_profile(profile_dir, p.id, modlist, log)){
             mod_cursor = 0; mod_scroll = 0;
             persistSelectionCache();
             markConflictsDirty();
@@ -505,7 +599,7 @@
     void overwriteProfileAtCursor(){
         if(profile_list.empty()) return;
         const auto& p = profile_list[profile_cursor];
-        if(mods::save_selection_profile(modlist, PROFILE_DIR, p.label, log)){
+        if(mods::save_selection_profile(modlist, profile_dir, p.label, log)){
             refreshProfileList();
             setProfileMessage("Updated " + p.label);
         }else{
@@ -534,7 +628,7 @@
             setProfileMessage("Save canceled");
             return;
         }
-        if(mods::save_selection_profile(modlist, PROFILE_DIR, name, log)){
+        if(mods::save_selection_profile(modlist, profile_dir, name, log)){
             refreshProfileList();
             setProfileMessage("Saved " + name);
         }else{
@@ -544,7 +638,7 @@
     void deleteProfileAtCursor(){
         if(profile_list.empty()) return;
         const auto p = profile_list[profile_cursor];
-        if(mods::delete_selection_profile(PROFILE_DIR, p.id, log)){
+        if(mods::delete_selection_profile(profile_dir, p.id, log)){
             refreshProfileList();
             setProfileMessage("Deleted " + p.label);
         }else{
@@ -554,12 +648,12 @@
 
     void restoreSelectionCache(){
         if(modlist.empty()) return;
-        mods::load_selection_cache(SELECTION_CACHE_PATH, modlist, log);
+        mods::load_selection_cache(selection_cache_path, modlist, log);
         markConflictsDirty();
     }
     void persistSelectionCache(){
         if(modlist.empty()) return;
-        mods::save_selection_cache(modlist, SELECTION_CACHE_PATH, log);
+        mods::save_selection_cache(modlist, selection_cache_path, log);
     }
     void markConflictsDirty(){
         conflicts_dirty = true;
@@ -804,6 +898,10 @@
         return result;
     }
     bool copyLegacyModsOnce(){
+        if(active_game == ActiveGame::SV){
+            settings_message = "Legacy copy is only for ZA mods.";
+            return false;
+        }
         if(legacy_copying.load()){
             settings_message = "Legacy copy already running.";
             return false;

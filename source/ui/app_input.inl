@@ -277,6 +277,14 @@
         if(screen==Screen::Mods){
             int item_h=32, top=100, max_vis=(WIN_H-top-20)/item_h;
             int page = std::max(1, max_vis - 1);
+            if(modlist.empty()){
+                mod_cursor = 0;
+                mod_scroll = 0;
+                if(down&HidNpadButton_Y){
+                    requestRescan();
+                }
+                return;
+            }
             if(down&HidNpadButton_ZL) mod_cursor=std::max(0,mod_cursor-page);
             if(down&HidNpadButton_ZR) mod_cursor=std::min((int)modlist.size()-1,mod_cursor+page);
             if(down&HidNpadButton_Up)   mod_cursor=std::max(0,mod_cursor-1);
@@ -285,7 +293,8 @@
             if(down&HidNpadButton_A){
                 if(busy){
                     log += "[apply] busy; cannot change selection\n";
-                }else if(!modlist.empty()){
+                }else{
+                    mod_cursor = std::max(0, std::min(mod_cursor, (int)modlist.size()-1));
                     modlist[mod_cursor].selected=!modlist[mod_cursor].selected;
                     persistSelectionCache();
                     markConflictsDirty();
@@ -316,7 +325,7 @@
                 }
                 log += "[apply] target="+target_romfs+"\n";
                 if(!fsx::makedirs(target_romfs)){ log+="[apply] cannot create target\n"; gotoLogTabOrFallback(); return; }
-                if(clear_target_before_apply) mods::clear_target_known(target_romfs, log);
+                if(clear_target_before_apply) mods::clear_target_known(target_romfs, log, activeModsGame());
 
                 applying = true; app_done = false; app_failed = false;
                 app_prog.done = 0; app_prog.total = 0; app_prog.bytes = 0; app_prog.cancel = false;
@@ -336,7 +345,7 @@
             }
             if (down & HidNpadButton_Y) {
                 log += "[launch] requesting start...\n";
-                launch_title_id(TRINITY_TID, log);
+                launch_title_id(activeTitleId(), log);
                 // Usually system will switch away; if it returns, show Log
                 gotoLogTabOrFallback();
             }
@@ -403,6 +412,18 @@
                 touch_controls_enabled = !touch_controls_enabled;
                 touch_active = false;
                 settings_message = touch_controls_enabled ? "Touch controls enabled." : "Touch controls disabled.";
+            }
+            if(down & HidNpadButton_B){
+                active_game = (active_game==ActiveGame::SV) ? ActiveGame::ZA : ActiveGame::SV;
+                saveSettings();
+                applyGameSelection(true);
+                settings_message = std::string("Switched to ") + activeGameName() + ".";
+            }
+            if((down & HidNpadButton_ZR) && active_game==ActiveGame::SV){
+                sv_title = (sv_title==SvTitle::Scarlet) ? SvTitle::Violet : SvTitle::Scarlet;
+                saveSettings();
+                setDefaultTargetRomfs();
+                settings_message = std::string("SV title set to ") + activeSvTitleName() + ".";
             }
             if(down & HidNpadButton_X){
                 copyLegacyModsOnce();

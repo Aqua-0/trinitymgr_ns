@@ -180,15 +180,15 @@ std::string normalize_url(std::string u){
     return u;
 }
 
-std::vector<ModItem> fetch_mods_index_page(std::string& log, int limit, int page){
+std::vector<ModItem> fetch_mods_index_page(std::string& log, int limit, int page, int game_id){
     std::vector<ModItem> out;
     std::unordered_set<int> seen;
 
     char url[512];
     snprintf(url,sizeof(url),
         "https://gamebanana.com/apiv11/Mod/Index"
-        "?_aFilters%%5BGeneric_Game%%5D=23582&_nPerpage=%d&_nPage=%d&_sSort=Generic_Newest",
-        limit, page);
+        "?_aFilters%%5BGeneric_Game%%5D=%d&_nPerpage=%d&_nPage=%d&_sSort=Generic_Newest",
+        game_id, limit, page);
     log += std::string("[gb] index url=") + url + "\n";
 
     std::string body;
@@ -389,10 +389,15 @@ bool http_get(const std::string& url, std::string& body, std::string& log){
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "TrinityMgr/1.0");
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity");
     curl_easy_setopt(curl, CURLOPT_BUFFERSIZE, kCurlBufferSize);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &curl_write_str);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 15000L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 15L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 8L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 30000L);
 
     log += "[gb] url=" + url + "\n";
     CURLcode rc = curl_easy_perform(curl);
@@ -407,12 +412,6 @@ bool http_get(const std::string& url, std::string& body, std::string& log){
     char buf[96];
     snprintf(buf,sizeof(buf),"[gb] http=%ld bytes=%zu\n", http_code, (size_t)body.size());
     log += buf;
-
-    if(!body.empty()){
-        size_t n = std::min<size_t>(body.size(), 512);
-        log.append(body.data(), n);
-        log.push_back('\n');
-    }
     return http_code==200 && !body.empty();
 }
 

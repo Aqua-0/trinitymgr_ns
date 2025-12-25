@@ -36,17 +36,24 @@
         int hintX = NAV_W+20 + textw(hintLeft, true);
         text("X = conflict", hintX, 60, conflictColor, true);
         int item_h=40, top=100, max_vis=(WIN_H-top-20)/item_h;
+        if(modlist.empty()){
+            mod_cursor = 0;
+            mod_scroll = 0;
+            text("No mods found.", NAV_W+20, top, textPrimary());
+            text(std::string("Put mods in ") + mods_root + " and press [Y] to rescan.", NAV_W+20, top+32, textMuted(), true);
+            return;
+        }
         std::vector<char> conflictFlags(modlist.size(), 0);
-        if(!modlist.empty()){
-            const auto& conflicts = getConflicts();
-            for(const auto& c : conflicts){
-                for(int idx : c.second){
-                    if(idx>=0 && idx<(int)conflictFlags.size()){
-                        conflictFlags[idx] = 1;
-                    }
+        const auto& conflicts = getConflicts();
+        for(const auto& c : conflicts){
+            for(int idx : c.second){
+                if(idx>=0 && idx<(int)conflictFlags.size()){
+                    conflictFlags[idx] = 1;
                 }
             }
         }
+        mod_cursor = std::max(0, std::min(mod_cursor, (int)modlist.size()-1));
+        mod_scroll = std::max(0, std::min(mod_scroll, (int)modlist.size()-1));
         if(mod_cursor<mod_scroll) mod_scroll=mod_cursor;
         if(mod_cursor>=mod_scroll+max_vis) mod_scroll=mod_cursor-max_vis+1;
         for(int i=0;i<max_vis;i++){
@@ -102,7 +109,7 @@
 
     void drawBrowse(){
         SDL_Rect panel{NAV_W,0,WIN_W-NAV_W,WIN_H}; fill(themePanelBg(),panel);
-        std::string title = "GameBanana - Page " + std::to_string(gb_page+1) + " (ZL/ZR switch)";
+        std::string title = std::string("GameBanana (") + activeGameName() + ") - Page " + std::to_string(gb_page+1) + " (ZL/ZR switch)";
         text(title, NAV_W+20, 24, textTitle());
         text("TopSubs - " + std::to_string(GB_PER_PAGE) + " per page  |  [Y] refresh  [A] download",
             NAV_W+20, 60, textMuted(), true);
@@ -114,11 +121,30 @@
         if(gb_fetching.load()){
             int y=100;
             text("Loading...", NAV_W+20, y, textPrimary());
+            if(!gb_status.empty()){
+                std::vector<std::string> lines;
+                gfx::wrapTextLines(gb_status, WIN_W - NAV_W - 40, font, font_small, true, lines);
+                int yy = y + 28;
+                for(size_t i=0;i<lines.size() && i<6;i++){
+                    text(lines[i], NAV_W+20, yy, textMuted(), true);
+                    yy += 22;
+                }
+            }
             return;
         }
         if(gb_items.empty()){
             int y=100;
-            text("No items. Press Y.", NAV_W+20, y, textPrimary()); return;
+            text("No items. Press Y to refresh.", NAV_W+20, y, textPrimary());
+            if(!gb_status.empty()){
+                std::vector<std::string> lines;
+                gfx::wrapTextLines(gb_status, WIN_W - NAV_W - 40, font, font_small, true, lines);
+                int yy = y + 28;
+                for(size_t i=0;i<lines.size() && i<8;i++){
+                    text(lines[i], NAV_W+20, yy, textMuted(), true);
+                    yy += 22;
+                }
+            }
+            return;
         }
         int y=100;
         for(int idx=0; idx<(int)gb_items.size(); ++idx){
@@ -130,7 +156,7 @@
             SDL_Rect row{card.x+6, card.y+4, card.w-12, card.h-8};
             if(idx==browse_cursor) fillRounded(themeHighlight(), row, 12);
 
-            thumb_cache.ensure(mods_root, it.id, it.thumb, log);
+            thumb_cache.ensure(mods_root, gb_game_id, it.id, it.thumb, log);
             auto itex = thumb_cache.small.find(it.id);
             if(itex!=thumb_cache.small.end() && itex->second.tex.valid()){
                 SDL_Rect dst{ row.x+8, row.y+8, thW, thH };
@@ -294,8 +320,8 @@
                 currentUrl = info_gallery_images[info_gallery_index].url.empty() ? item.thumb : info_gallery_images[info_gallery_index].url;
             }
         }
-        thumb_cache.ensure(mods_root, currentKey, currentUrl, log);
-        thumb_cache.ensureLarge(mods_root, currentKey, currentUrl, log);
+        thumb_cache.ensure(mods_root, gb_game_id, currentKey, currentUrl, log);
+        thumb_cache.ensureLarge(mods_root, gb_game_id, currentKey, currentUrl, log);
         auto texIt = thumb_cache.large.find(currentKey);
         if(texIt!=thumb_cache.large.end() && texIt->second.tex.valid()){
             int tw = texIt->second.tex.w;
@@ -325,8 +351,8 @@
                 if(cur < 0 || cur >= (int)info_gallery_images.size()) cur = 0;
                 int key = info_gallery_images[cur].key;
                 std::string url = info_gallery_images[cur].url;
-                thumb_cache.ensure(mods_root, key, url, log);
-                thumb_cache.ensureLarge(mods_root, key, url, log);
+                thumb_cache.ensure(mods_root, gb_game_id, key, url, log);
+                thumb_cache.ensureLarge(mods_root, gb_game_id, key, url, log);
                 auto gtex = thumb_cache.large.find(key);
                 int gW = WIN_W * 3 / 4;
                 int gH = WIN_H * 3 / 4;
@@ -449,6 +475,25 @@
         SDL_Rect panel{NAV_W,0,WIN_W-NAV_W,WIN_H}; fill(themePanelBg(),panel);
         text("Settings", NAV_W+20, 24, textTitle());
         int y = 80;
+
+        std::string gameLine = std::string("Active game: ") + activeGameName();
+        if(active_game == ActiveGame::SV){
+            gameLine += std::string(" (") + activeSvTitleName() + ")";
+        }
+        gameLine += "  [B] toggle";
+        if(active_game == ActiveGame::SV){
+            gameLine += "  [ZR] switch title";
+        }
+        text(gameLine, NAV_W+20, y, textPrimary());
+        y += 30;
+        text(std::string("TitleId: 0x") + tidToString(activeTitleId()) + "  |  GameBanana game id: " + std::to_string(gb_game_id),
+             NAV_W+20, y, textMuted(), true);
+        y += 30;
+        text(std::string("Mods folder: ") + mods_root, NAV_W+20, y, textMuted(), true);
+        y += 26;
+        text(std::string("Target: ") + target_romfs, NAV_W+20, y, textMuted(), true);
+
+        y += 40;
         std::string touchState = touch_controls_enabled ? "ENABLED" : "DISABLED";
         std::string touchLine = std::string("Touch controls: ") + touchState + "  [A] toggle";
         text(touchLine, NAV_W+20, y, textPrimary());
@@ -458,12 +503,16 @@
         y += 56;
         text("Legacy mods copy", NAV_W+20, y, textTitle());
         y += 32;
-        std::string copyLine = std::string("[X] Copy once from ") + MODS_ROOT_LEGACY;
-        text(copyLine, NAV_W+20, y, textPrimary(), true);
-        y += 28;
-        text(std::string("to ") + MODS_ROOT_NEW, NAV_W+20, y, textPrimary(), true);
-        y += 28;
-        text("Existing files in the new folder will be overwritten. Use to migrate old installs.", NAV_W+20, y, textMuted(), true);
+        if(active_game == ActiveGame::SV){
+            text("Not applicable for SV. Switch to ZA to migrate legacy installs.", NAV_W+20, y, textMuted(), true);
+        }else{
+            std::string copyLine = std::string("[X] Copy once from ") + MODS_ROOT_LEGACY;
+            text(copyLine, NAV_W+20, y, textPrimary(), true);
+            y += 28;
+            text(std::string("to ") + MODS_ROOT_NEW, NAV_W+20, y, textPrimary(), true);
+            y += 28;
+            text("Existing files in the new folder will be overwritten. Use to migrate old installs.", NAV_W+20, y, textMuted(), true);
+        }
 
         y += 56;
         text("Updates", NAV_W+20, y, textTitle());

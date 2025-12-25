@@ -6,6 +6,11 @@
 
 namespace mods {
 
+enum class Game {
+    ZA,
+    SV,
+};
+
 struct ModEntry{
     std::string name;
     std::string path;
@@ -15,8 +20,8 @@ struct ModEntry{
     bool selected=false;
 };
 
-std::vector<ModEntry> scan_root(const std::string& root,std::string& log);
-bool clear_target_known(const std::string& target_romfs, std::string& log);
+std::vector<ModEntry> scan_root(const std::string& root, std::string& log, Game game=Game::ZA);
+bool clear_target_known(const std::string& target_romfs, std::string& log, Game game=Game::ZA);
 std::vector<std::pair<std::string, std::vector<int>>> compute_conflicts(const std::vector<ModEntry>& mods);
 bool apply_copy_progress(const std::vector<ModEntry>& mods,
                          const std::string& target_romfs,

@@ -47,7 +47,7 @@ struct DlProg {
 std::string json_unescape(const std::string& s);
 std::string normalize_url(std::string u);
 bool http_get(const std::string& url, std::string& body, std::string& log);
-std::vector<ModItem> fetch_mods_index_page(std::string& log, int limit=10, int page=1);
+std::vector<ModItem> fetch_mods_index_page(std::string& log, int limit=10, int page=1, int game_id=23582);
 bool fetch_mod_thumb_url(int mod_id, std::string& out_url, std::string& log);
 bool http_get_bytes_ref(const std::string& in_url,
                         const std::string& referer,

@@ -68,21 +68,53 @@ namespace ui {
 enum class Screen{ Mods, Target, Apply, Browse, Profiles, Settings, Log, About };
 
 struct App {
+    static std::string tailLines(const std::string& s, int maxLines){
+        if(maxLines <= 0 || s.empty()) return {};
+        int lines = 0;
+        for(size_t i=s.size(); i>0; --i){
+            if(s[i-1] == '\n'){
+                lines++;
+                if(lines >= maxLines){
+                    return s.substr(i);
+                }
+            }
+        }
+        return s;
+    }
     static constexpr int WIN_W=1280, WIN_H=720;
     static constexpr int NAV_W=280;
-    static constexpr u64 TRINITY_TID = 0x0100F43008C44000ULL;
-    static constexpr const char* SELECTION_CACHE_PATH = "sdmc:/switch/trinitymgr_ns/last_modset.txt";
-    static constexpr const char* PROFILE_DIR = "sdmc:/switch/trinitymgr_ns/profiles";
+    static constexpr u64 ZA_TID = 0x0100F43008C44000ULL;
+    static constexpr u64 SV_VIOLET_TID  = 0x01008F6008C5E000ULL;
+    static constexpr u64 SV_SCARLET_TID = 0x0100A3D008C5C000ULL;
+    static constexpr int GB_GAME_ZA = 23582;
+    static constexpr int GB_GAME_SV = 17220;
+
+    static constexpr const char* SETTINGS_PATH = "sdmc:/switch/trinitymgr_ns/settings.txt";
+    static constexpr const char* SELECTION_CACHE_PATH_ZA = "sdmc:/switch/trinitymgr_ns/last_modset.txt";
+    static constexpr const char* PROFILE_DIR_ZA = "sdmc:/switch/trinitymgr_ns/profiles";
+    static constexpr const char* SELECTION_CACHE_PATH_SV = "sdmc:/switch/trinitymgr_ns/last_modset_sv.txt";
+    static constexpr const char* PROFILE_DIR_SV = "sdmc:/switch/trinitymgr_ns/profiles_sv";
+
     static constexpr const char* MODS_PARENT_DIR = "sdmc:/switch/trinitymgr_ns";
     static constexpr const char* MODS_ROOT_NEW   = "sdmc:/switch/trinitymgr_ns/PLZAMods";
     static constexpr const char* MODS_ROOT_LEGACY = "sdmc:/switch/PLZAMods";
+    static constexpr const char* MODS_ROOT_SV = "sdmc:/switch/trinitymgr_ns/SVMods";
     static constexpr const char* SELF_NRO_PATH = "sdmc:/switch/trinitymgr_ns/trinitymgr_ns.nro";
     static constexpr const char* UPDATE_ASSET_HINT = "trinitymgr_ns";
     static constexpr const char* DEFAULT_UPDATE_FEED = "https://api.github.com/repos/Aqua-0/trinitymgr_ns/releases/latest";
     static constexpr const char* APP_VERSION_STRING = "2.0";
+
+    enum class ActiveGame { ZA, SV };
+    enum class SvTitle { Violet, Scarlet };
+    ActiveGame active_game = ActiveGame::ZA;
+    SvTitle sv_title = SvTitle::Violet;
+
+    int gb_game_id = GB_GAME_ZA;
     std::string mods_root    = MODS_ROOT_NEW;
     std::string self_nro_path = SELF_NRO_PATH;
-    std::string target_romfs = "sdmc:/atmosphere/contents/0100F43008C44000/romfs";
+    std::string target_romfs;
+    std::string selection_cache_path = SELECTION_CACHE_PATH_ZA;
+    std::string profile_dir = PROFILE_DIR_ZA;
     std::vector<mods::ModEntry> modlist;
     int menu_cursor=0;
     int mod_cursor=0, mod_scroll=0;
@@ -128,14 +160,20 @@ struct App {
     std::atomic<bool> rescanning{false};
     std::atomic<bool> rescan_done{false};
     std::atomic<bool> rescan_failed{false};
+    mods::Game rescan_game = mods::Game::ZA;
+    std::string rescan_root;
 
     Thread gb_thread{}; bool gb_thread_alive=false; void* gb_stack=nullptr;
     std::atomic<bool> gb_fetching{false};
     std::atomic<bool> gb_done{false};
     std::atomic<bool> gb_failed{false};
     int gb_request_page=0;
+    int gb_request_game_id = GB_GAME_ZA;
+    int gb_result_page = 0;
+    int gb_result_game_id = GB_GAME_ZA;
     int gb_pending_page=-1;
     std::string gb_thread_log;
+    std::string gb_status;
     std::vector<gb::ModItem> gb_thread_items;
     struct ModInfoCacheEntry{
         std::string desc;
@@ -347,12 +385,17 @@ struct App {
             }
             if (rescan_done.exchange(false)){
                 if(!rescan_thread_log.empty()){ log += rescan_thread_log; rescan_thread_log.clear(); }
-                modlist = std::move(rescan_result);
-                for(auto& m:modlist) m.selected = true;
-                mod_cursor = 0;
-                mod_scroll = 0;
-                restoreSelectionCache();
-                markConflictsDirty();
+                if(rescan_game != activeModsGame() || rescan_root != mods_root){
+                    log += "[scan] stale result discarded\n";
+                    rescan_result.clear();
+                }else{
+                    modlist = std::move(rescan_result);
+                    for(auto& m:modlist) m.selected = true;
+                    mod_cursor = 0;
+                    mod_scroll = 0;
+                    restoreSelectionCache();
+                    markConflictsDirty();
+                }
             }
             if (rescan_failed.exchange(false)){
                 // message already logged in startRescanThread
@@ -362,9 +405,20 @@ struct App {
                 startRescanThread();
             }
             if (gb_done.exchange(false)){
-                if(!gb_thread_log.empty()){ log += gb_thread_log; gb_thread_log.clear(); }
-                gb_items = std::move(gb_thread_items);
-                browse_cursor = gb_items.empty() ? 0 : std::min(browse_cursor, (int)gb_items.size()-1);
+                std::string tlog;
+                tlog.swap(gb_thread_log);
+                if(!tlog.empty()){
+                    gb_status = tailLines(tlog, 4);
+                    log += tlog;
+                }
+                if(gb_result_game_id != gb_game_id){
+                    log += "[gb] stale page discarded\n";
+                    gb_thread_items.clear();
+                }else{
+                    gb_page = gb_result_page;
+                    gb_items = std::move(gb_thread_items);
+                    browse_cursor = gb_items.empty() ? 0 : std::min(browse_cursor, (int)gb_items.size()-1);
+                }
                 if(gb_pending_page >= 0 && !gb_fetching.load() && !gb_thread_alive){
                     int next = gb_pending_page;
                     gb_pending_page = -1;
@@ -372,6 +426,7 @@ struct App {
                 }
             }
             if (gb_failed.exchange(false)){
+                if(gb_status.empty()) gb_status = "[gb] request failed";
                 if(gb_pending_page >= 0 && !gb_fetching.load() && !gb_thread_alive){
                     int next = gb_pending_page;
                     gb_pending_page = -1;

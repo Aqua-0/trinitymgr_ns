@@ -17,8 +17,8 @@ public:
         gfx::Texture tex;
     };
 
-    bool ensure(const std::string& mods_root, int id, const std::string& url_in, std::string& log);
-    bool ensureLarge(const std::string& mods_root, int id, const std::string& url_in, std::string& log);
+    bool ensure(const std::string& mods_root, int gb_game_id, int id, const std::string& url_in, std::string& log);
+    bool ensureLarge(const std::string& mods_root, int gb_game_id, int id, const std::string& url_in, std::string& log);
     void clear();
     void clearLarge();
 

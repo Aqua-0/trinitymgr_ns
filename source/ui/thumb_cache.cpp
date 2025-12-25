@@ -87,7 +87,7 @@ bool decodeTextureFromBytes(const std::vector<unsigned char>& bytes, gfx::Textur
     return true;
 }
 
-bool fetchThumbBytes(int id, const std::string& mods_root, const std::string& url_in,
+bool fetchThumbBytes(int id, const std::string& mods_root, int gb_game_id, const std::string& url_in,
                      std::vector<unsigned char>& bytes, std::unordered_set<int>& tried, std::string& log){
     const std::string dir = mods_root + "/_thumbs";
     fsx::makedirs(dir);
@@ -117,7 +117,9 @@ bool fetchThumbBytes(int id, const std::string& mods_root, const std::string& ur
         return false;
     }
     std::vector<unsigned char> data;
-    if(!gb::http_get_bytes_ref(u, "https://gamebanana.com/games/23582", data, log)){
+    char ref[128];
+    snprintf(ref, sizeof(ref), "https://gamebanana.com/games/%d", gb_game_id);
+    if(!gb::http_get_bytes_ref(u, ref, data, log)){
         log += "[thumb] download fail: " + u + "\n";
         tried.insert(id);
         return false;
@@ -172,14 +174,14 @@ void ThumbCache::enforceLargeLimit(){
     }
 }
 
-bool ThumbCache::ensure(const std::string& mods_root, int id, const std::string& url_in, std::string& log){
+bool ThumbCache::ensure(const std::string& mods_root, int gb_game_id, int id, const std::string& url_in, std::string& log){
     auto smallIt = small.find(id);
     if(smallIt != small.end() && smallIt->second.tex.valid()){
         touchSmall(id);
         return true;
     }
     std::vector<unsigned char> bytes;
-    if(!fetchThumbBytes(id, mods_root, url_in, bytes, tried, log)) return false;
+    if(!fetchThumbBytes(id, mods_root, gb_game_id, url_in, bytes, tried, log)) return false;
     gfx::Texture decoded;
     if(!decodeTextureFromBytes(bytes, decoded, log)){
         tried.insert(id);
@@ -193,14 +195,14 @@ bool ThumbCache::ensure(const std::string& mods_root, int id, const std::string&
     return true;
 }
 
-bool ThumbCache::ensureLarge(const std::string& mods_root, int id, const std::string& url_in, std::string& log){
+bool ThumbCache::ensureLarge(const std::string& mods_root, int gb_game_id, int id, const std::string& url_in, std::string& log){
     auto largeIt = large.find(id);
     if(largeIt != large.end() && largeIt->second.tex.valid()){
         touchLarge(id);
         return true;
     }
     std::vector<unsigned char> bytes;
-    if(!fetchThumbBytes(id, mods_root, url_in, bytes, tried, log)) return false;
+    if(!fetchThumbBytes(id, mods_root, gb_game_id, url_in, bytes, tried, log)) return false;
     gfx::Texture decoded;
     if(!decodeTextureFromBytes(bytes, decoded, log)){
         tried.insert(id);

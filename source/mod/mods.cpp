@@ -17,32 +17,50 @@
 namespace mods {
 
 namespace {
-static const char* kKnownTopDirsArr[]{
+static const char* kKnownTopDirsLA[]{
     "ai_influence","avalon","field","ik_ai_behavior","ik_chara","ik_demo","ik_effect",
     "ik_event","ik_message","ik_pokemon","light","param_ai","param_chr","script",
     "system_resource","system","ui","world","arc","shaders"
 };
-static bool is_known_top(const std::string& n){ for(auto* s:kKnownTopDirsArr) if(strcasecmp(n.c_str(),s)==0) return true; return false; }
+// TODO: SV list is currently identical; adjust as needed for SV-specific layouts.
+static const char* kKnownTopDirsSV[]{
+    "ai_influence","avalon","field","ik_ai_behavior","ik_chara","ik_demo","ik_effect",
+    "ik_event","ik_message","ik_pokemon","light","param_ai","param_chr","script",
+    "system_resource","system","ui","world","arc","shaders"
+};
+static const char* const* known_dirs_for(Game game){
+    return (game==Game::SV) ? kKnownTopDirsSV : kKnownTopDirsLA;
+}
+static size_t known_dirs_count_for(Game game){
+    return (game==Game::SV) ? (sizeof(kKnownTopDirsSV)/sizeof(kKnownTopDirsSV[0]))
+                            : (sizeof(kKnownTopDirsLA)/sizeof(kKnownTopDirsLA[0]));
+}
+static bool is_known_top(const std::string& n, Game game){
+    const char* const* arr = known_dirs_for(game);
+    size_t count = known_dirs_count_for(game);
+    for(size_t i=0;i<count;i++) if(strcasecmp(n.c_str(), arr[i])==0) return true;
+    return false;
+}
 
-static bool has_known_child(const std::string& dir){
+static bool has_known_child(const std::string& dir, Game game){
     DIR* d=opendir(dir.c_str()); if(!d) return false;
     bool ok=false; while(auto* e=readdir(d)){
         if(e->d_name[0]=='.') continue;
         std::string c=e->d_name; std::string p=dir+"/"+c; struct stat st{};
-        if(stat(p.c_str(),&st)==0 && S_ISDIR(st.st_mode) && is_known_top(c)){ ok=true; break; }
+        if(stat(p.c_str(),&st)==0 && S_ISDIR(st.st_mode) && is_known_top(c, game)){ ok=true; break; }
     } closedir(d); return ok;
 }
-static bool find_romfs_root_rec(const std::string& start, std::string& out, int depth_limit=6){
+static bool find_romfs_root_rec(const std::string& start, std::string& out, Game game, int depth_limit=6){
     if(depth_limit<0) return false;
     if(fsx::isdir(start+"/romfs")){ out=start+"/romfs"; return true; }
-    if(has_known_child(start)){ out=start; return true; }
+    if(has_known_child(start, game)){ out=start; return true; }
     DIR* d=opendir(start.c_str()); if(!d) return false;
     bool found=false;
     while(auto* e=readdir(d)){
         if(e->d_name[0]=='.') continue;
         std::string c=e->d_name; std::string p=start+"/"+c; struct stat st{};
         if(stat(p.c_str(),&st)==0 && S_ISDIR(st.st_mode)){
-            if(find_romfs_root_rec(p, out, depth_limit-1)){ found=true; break; }
+            if(find_romfs_root_rec(p, out, game, depth_limit-1)){ found=true; break; }
         }
     } closedir(d); return found;
 }
@@ -95,7 +113,7 @@ static std::vector<std::pair<std::string, std::vector<int>>> compute_conflicts_i
 
 } // namespace
 
-std::vector<ModEntry> scan_root(const std::string& root,std::string& log){
+std::vector<ModEntry> scan_root(const std::string& root, std::string& log, Game game){
     std::vector<ModEntry> out;
     if(!fsx::isdir(root)){ log+="[scan] mods_root missing: "+root+"\n"; return out; }
     const std::string cache_root = root + "/_unzipped";
@@ -118,41 +136,38 @@ std::vector<ModEntry> scan_root(const std::string& root,std::string& log){
                         log += "[zip] clean fail: " + out_dir + "\n"; continue;
                     }
                 }
+                log += "[zip] extracting: " + de.path + " -> " + out_dir + "\n";
                 if(!zipx::unzip_to(de.path, out_dir, log)){
+                    log += "[zip] extract fail: " + de.path + "\n";
                     continue;
                 }
                 zipx::write_stamp(out_dir, zsize, zmt);
             }
+            display_name = strip_ext(zipname);
             candidate_path = out_dir;
-            display_name = strip_ext(base);
         } else if(de.is_dir){
-            candidate_path = de.path;
             display_name = base;
-        } else continue;
+            candidate_path = de.path;
+        } else {
+            continue;
+        }
 
-        std::string romfs_root, exefs_root;
-        find_romfs_root_rec(candidate_path, romfs_root, 8);
+        std::string romfs_root;
+        std::string exefs_root;
+        find_romfs_root_rec(candidate_path, romfs_root, game, 8);
         find_first_dir_named(candidate_path, "exefs", exefs_root, 8);
-        bool fallback_mode = false;
+
+        bool fallback_mode=false;
         std::vector<std::string> fallback_entries;
         if(romfs_root.empty() && exefs_root.empty()){
-            std::vector<std::string> rels; fsx::list_files_rec(candidate_path,"",rels);
-            for(auto& r: rels){
-                std::string norm=r; std::replace(norm.begin(),norm.end(),'\\','/');
-                size_t start=0;
-                while(start < norm.size()){
-                    size_t slash = norm.find('/', start);
-                    std::string part = (slash==std::string::npos) ? norm.substr(start)
-                                                                  : norm.substr(start, slash-start);
-                    if(is_known_top(part)){
-                        std::string sub = norm.substr(start);
-                        if(!sub.empty()){
-                            fallback_entries.push_back("romfs/"+sub);
-                        }
-                        break;
-                    }
-                    if(slash==std::string::npos) break;
-                    start = slash+1;
+            std::vector<std::string> rels;
+            fsx::list_files_rec(candidate_path,"",rels);
+            for(auto& rel : rels){
+                std::string norm=rel; std::replace(norm.begin(),norm.end(),'\\','/');
+                size_t slash = norm.find('/');
+                std::string top = (slash==std::string::npos)?norm:norm.substr(0,slash);
+                if(is_known_top(top, game)){
+                    fallback_entries.push_back("romfs/"+norm);
                 }
             }
             if(fallback_entries.empty()){
@@ -175,7 +190,7 @@ std::vector<ModEntry> scan_root(const std::string& root,std::string& log){
                 std::string norm=r; std::replace(norm.begin(),norm.end(),'\\','/');
                 if(norm=="arc/data.trpfd" || norm=="arc/data.trpfd.csv") continue;
                 auto pos=norm.find('/'); std::string top=pos==std::string::npos?norm:norm.substr(0,pos);
-                if(!is_known_top(top)) continue;
+                if(!is_known_top(top, game)) continue;
                 m.files.push_back("romfs/"+norm);
             }
         }
@@ -194,11 +209,16 @@ std::vector<ModEntry> scan_root(const std::string& root,std::string& log){
     return out;
 }
 
-bool clear_target_known(const std::string& target_romfs, std::string& log){
+bool clear_target_known(const std::string& target_romfs, std::string& log, Game game){
     size_t removed=0, failed=0;
-    for(auto* d: kKnownTopDirsArr){
-        std::string path = target_romfs + "/" + d;
-        if(fsx::isdir(path)){ if(fsx::rmtree(path)) removed++; else { failed++; log += std::string("[clear] fail: ") + path + "\n"; } }
+    const char* const* arr = known_dirs_for(game);
+    size_t count = known_dirs_count_for(game);
+    for(size_t i=0;i<count;i++){
+        std::string path = target_romfs + "/" + arr[i];
+        if(fsx::isdir(path)){
+            if(fsx::rmtree(path)) removed++;
+            else { failed++; log += std::string("[clear] fail: ") + path + "\n"; }
+        }
     }
     std::string content_root = target_romfs;
     if(content_root.size()>=6 && strcasecmp(content_root.c_str()+content_root.size()-6, "/romfs")==0) content_root.resize(content_root.size()-6);
